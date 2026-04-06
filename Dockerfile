@@ -21,8 +21,11 @@ RUN pip install --no-cache-dir \
     decord==0.6.0 \
     librosa==0.11.0 \
     scikit-video==1.1.11 \
-    flash-attn --no-build-isolation && \
+    huggingface_hub && \
     pip install --no-cache-dir transformers==4.41.2
+
+# flash-attn needs CUDA at build time — skip if no GPU, install at runtime
+RUN pip install --no-cache-dir flash-attn --no-build-isolation 2>/dev/null || echo "flash-attn skipped (no GPU at build time)"
 
 # Python deps for RVM
 RUN pip install --no-cache-dir av pims
@@ -30,16 +33,11 @@ RUN pip install --no-cache-dir av pims
 # RunPod serverless SDK
 RUN pip install --no-cache-dir runpod
 
-# Clone HVA
+# Clone HVA code (no weights — downloaded at runtime to /runpod-volume)
 RUN git clone https://github.com/Tencent-Hunyuan/HunyuanVideo-Avatar.git /app/hva
 
-# Download HVA weights (~30GB)
-RUN pip install --no-cache-dir huggingface_hub && \
-    python3 -c "from huggingface_hub import snapshot_download; snapshot_download(repo_id='tencent/HunyuanVideo-Avatar', local_dir='/app/hva/weights')"
-
-# Clone RVM + download weights
-RUN git clone https://github.com/PeterL1n/RobustVideoMatting.git /app/rvm && \
-    python3 -c "import torch; model = torch.hub.load('PeterL1n/RobustVideoMatting', 'resnet50'); torch.save(model.state_dict(), '/app/rvm/rvm_resnet50.pth')"
+# Clone RVM code
+RUN git clone https://github.com/PeterL1n/RobustVideoMatting.git /app/rvm
 
 # Copy handler
 COPY handler.py /app/handler.py

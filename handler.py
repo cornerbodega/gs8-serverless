@@ -28,10 +28,36 @@ import subprocess
 import base64
 import glob
 import urllib.request
-import tempfile
+
+VOLUME_PATH = "/runpod-volume"
+HVA_WEIGHTS = os.path.join(VOLUME_PATH, "hva_weights")
+RVM_WEIGHTS = os.path.join(VOLUME_PATH, "rvm", "rvm_resnet50.pth")
+
 
 def download_file(url, dest):
     urllib.request.urlretrieve(url, dest)
+
+
+def ensure_weights():
+    """Download weights to network volume on first run. Subsequent runs use cache."""
+    if not os.path.exists(os.path.join(HVA_WEIGHTS, "ckpts")):
+        print("First run — downloading HVA weights to network volume...")
+        os.makedirs(HVA_WEIGHTS, exist_ok=True)
+        from huggingface_hub import snapshot_download
+        snapshot_download(repo_id="tencent/HunyuanVideo-Avatar", local_dir=HVA_WEIGHTS)
+        print("HVA weights cached.")
+    else:
+        print("HVA weights found on volume.")
+
+    if not os.path.exists(RVM_WEIGHTS):
+        print("First run — downloading RVM weights to network volume...")
+        os.makedirs(os.path.dirname(RVM_WEIGHTS), exist_ok=True)
+        import torch
+        model = torch.hub.load("PeterL1n/RobustVideoMatting", "resnet50")
+        torch.save(model.state_dict(), RVM_WEIGHTS)
+        print("RVM weights cached.")
+    else:
+        print("RVM weights found on volume.")
 
 def run_hva(image_path, audio_path, prompt, fps=25, infer_steps=15, image_size=512):
     """Run HunyuanVideo-Avatar inference."""
@@ -57,10 +83,10 @@ def run_hva(image_path, audio_path, prompt, fps=25, infer_steps=15, image_size=5
     # Run inference
     env = os.environ.copy()
     env["PYTHONPATH"] = hva_dir
-    env["MODEL_BASE"] = os.path.join(hva_dir, "weights")
+    env["MODEL_BASE"] = HVA_WEIGHTS
     env["DISABLE_SP"] = "1"
 
-    ckpt = os.path.join(hva_dir, "weights", "ckpts", "hunyuan-video-t2v-720p", "transformers", "mp_rank_00_model_states_fp8.pt")
+    ckpt = os.path.join(HVA_WEIGHTS, "ckpts", "hunyuan-video-t2v-720p", "transformers", "mp_rank_00_model_states_fp8.pt")
 
     cmd = [
         sys.executable, os.path.join(hva_dir, "hymm_sp", "sample_gpu_poor.py"),
@@ -98,7 +124,7 @@ def run_rvm(video_path):
     from inference import convert_video
 
     model = MattingNetwork("resnet50").eval().cuda()
-    model.load_state_dict(torch.load("/app/rvm/rvm_resnet50.pth"))
+    model.load_state_dict(torch.load(RVM_WEIGHTS))
 
     output_dir = "/tmp/rvm_rgba"
     os.makedirs(output_dir, exist_ok=True)
@@ -116,6 +142,7 @@ def run_rvm(video_path):
 
 def handler(job):
     """RunPod serverless handler."""
+    ensure_weights()
     input_data = job["input"]
 
     image_url = input_data["image_url"]
